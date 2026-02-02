@@ -1,0 +1,40 @@
+# whisp-rs configuration
+# Place this file at ~/.config/whisp-rs/config.toml
+
+# Hotkey to hold for recording (insert, pause, f4, f8)
+# hotkey = "insert"
+
+# Language code (en, fr, de, es, etc.) or empty for auto-detect
+# language = "en"
+
+# Audio input device name (empty string = system default)
+# audio_device = ""
+
+# Beam search size (1 = greedy, 5 = default)
+# beam_size = 5
+
+# Minimum recording duration in seconds (shorter recordings are discarded)
+# min_recording_seconds = 1.0
+
+# Debounce time in milliseconds after transcription finishes
+# debounce_ms = 100
+
+# --- Model selection ---
+# Use a named preset (easiest way to pick a model):
+# model = "medium.en"
+#
+# Available presets:
+#   tiny, tiny.en, base, base.en, small, small.en,
+#   medium, medium.en,
+#   large-v1, large-v2, large-v3, large-v3-turbo,
+#   distil-large-v3, distil-large-v3.5
+#
+# --- OR specify repo + file manually ---
+# model_repo = "ggerganov/whisper.cpp"
+# model_file = "ggml-medium.en.bin"
+#
+# --- OR point to a local file directly ---
+# model_path = "/path/to/your/model.bin"
+
+# Use GPU acceleration if available (requires CUDA; falls back to CPU)
+# use_gpu = true

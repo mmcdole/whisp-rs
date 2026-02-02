@@ -1,0 +1,22 @@
+[package]
+name = "whisp-rs"
+version = "0.1.0"
+edition = "2021"
+description = "Push-to-talk speech-to-text using whisper.cpp"
+
+[features]
+default = ["cuda"]
+cuda = ["whisper-rs/cuda"]
+
+[dependencies]
+whisper-rs = "0.13"
+whisper-rs-sys = "0.11"
+cpal = "0.15"
+evdev = "0.12"
+toml = "0.8"
+serde = { version = "1", features = ["derive"] }
+hf-hub = "0.4"
+dirs = "5"
+anyhow = "1"
+log = "0.4"
+env_logger = "0.11"

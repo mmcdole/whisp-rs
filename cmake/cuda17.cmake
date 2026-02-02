@@ -1,0 +1,3 @@
+# CUDA 13+ CCCL headers (CUB, Thrust, libcu++) require C++17.
+set(CMAKE_CUDA_STANDARD 17 CACHE STRING "CUDA C++ standard" FORCE)
+set(CMAKE_CUDA_STANDARD_REQUIRED ON CACHE BOOL "" FORCE)
