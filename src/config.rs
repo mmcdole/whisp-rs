@@ -3,32 +3,17 @@ use serde::Deserialize;
 use std::fs;
 use std::path::PathBuf;
 
+use crate::audio;
+
 const DEFAULT_CONFIG: &str = include_str!("../config.example.toml");
 
-/// Named model presets for whisper backend: (repo, file)
-fn resolve_whisper_preset(name: &str) -> Option<(&'static str, &'static str)> {
-    Some(match name {
-        "tiny" => ("ggerganov/whisper.cpp", "ggml-tiny.bin"),
-        "tiny.en" => ("ggerganov/whisper.cpp", "ggml-tiny.en.bin"),
-        "base" => ("ggerganov/whisper.cpp", "ggml-base.bin"),
-        "base.en" => ("ggerganov/whisper.cpp", "ggml-base.en.bin"),
-        "small" => ("ggerganov/whisper.cpp", "ggml-small.bin"),
-        "small.en" => ("ggerganov/whisper.cpp", "ggml-small.en.bin"),
-        "medium" => ("ggerganov/whisper.cpp", "ggml-medium.bin"),
-        "medium.en" => ("ggerganov/whisper.cpp", "ggml-medium.en.bin"),
-        "large-v1" => ("ggerganov/whisper.cpp", "ggml-large-v1.bin"),
-        "large-v2" => ("ggerganov/whisper.cpp", "ggml-large-v2.bin"),
-        "large-v3" => ("ggerganov/whisper.cpp", "ggml-large-v3.bin"),
-        "large-v3-turbo" => ("ggerganov/whisper.cpp", "ggml-large-v3-turbo.bin"),
-        "distil-large-v3" => ("distil-whisper/distil-large-v3-ggml", "ggml-distil-large-v3.bin"),
-        "distil-large-v3.5" => ("distil-whisper/distil-large-v3.5-ggml", "ggml-model.bin"),
-        _ => return None,
-    })
+pub fn available_presets() -> &'static [&'static str] {
+    &["parakeet-tdt-0.6b-v3"]
 }
 
-/// Named model presets for sherpa backend: (repo, &[files])
+/// Named model presets: (repo, &[files])
 /// Sherpa transducer models need encoder, decoder, joiner, and tokens files.
-fn resolve_sherpa_preset(name: &str) -> Option<(&'static str, &'static [&'static str])> {
+fn resolve_preset(name: &str) -> Option<(&'static str, &'static [&'static str])> {
     Some(match name {
         "parakeet-tdt-0.6b-v3" => (
             "csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8",
@@ -44,22 +29,14 @@ pub struct Config {
     pub hotkey: String,
     pub language: String,
     pub audio_device: String,
-    pub beam_size: i32,
     pub debounce_ms: u64,
-    /// Backend: "whisper" (default) or "sherpa"
-    pub backend: String,
-    /// Named preset (e.g. "medium.en", "distil-large-v3", "parakeet-tdt-0.6b-v3"). Overrides model_repo/model_file.
-    pub model: Option<String>,
-    pub model_repo: String,
-    pub model_file: String,
-    pub model_path: Option<String>,
-    /// Use GPU for inference if available (default: true)
-    pub use_gpu: bool,
+    /// Named preset (e.g. "parakeet-tdt-0.6b-v3").
+    pub model: String,
 }
 
 /// Resolved paths for sherpa transducer model files.
 #[derive(Debug)]
-pub struct SherpaModelPaths {
+pub struct ModelPaths {
     pub encoder: PathBuf,
     pub decoder: PathBuf,
     pub joiner: PathBuf,
@@ -72,14 +49,8 @@ impl Default for Config {
             hotkey: "insert".into(),
             language: "en".into(),
             audio_device: String::new(),
-            beam_size: 5,
             debounce_ms: 100,
-            backend: "whisper".into(),
-            model: Some("distil-large-v3".into()),
-            model_repo: "ggerganov/whisper.cpp".into(),
-            model_file: "ggml-medium.en.bin".into(),
-            model_path: None,
-            use_gpu: true,
+            model: "parakeet-tdt-0.6b-v3".into(),
         }
     }
 }
@@ -108,64 +79,87 @@ pub fn load_config() -> Result<Config> {
     Ok(config)
 }
 
-pub fn resolve_model_path(config: &Config) -> Result<PathBuf> {
-    // 1. Explicit local path
-    if let Some(ref p) = config.model_path {
-        let path = PathBuf::from(p);
-        anyhow::ensure!(path.exists(), "model_path does not exist: {}", p);
-        return Ok(path);
+pub fn resolve_model_paths(config: &Config) -> Result<ModelPaths> {
+    let (repo, files) = resolve_preset(&config.model).ok_or_else(|| {
+        anyhow::anyhow!(
+            "Unknown model preset '{}'. Valid presets: parakeet-tdt-0.6b-v3",
+            config.model
+        )
+    })?;
+
+    log::info!("Downloading model files from {repo}...");
+    let api = hf_hub::api::sync::Api::new()?;
+    let hf_repo = api.model(repo.to_string());
+
+    let mut paths = Vec::new();
+    for file in files {
+        let path = hf_repo.get(file)?;
+        log::info!("  {} ready at {}", file, path.display());
+        paths.push(path);
     }
 
-    // 2. Named preset or manual repo/file
-    let (repo, file) = if let Some(ref preset) = config.model {
-        let (r, f) = resolve_whisper_preset(preset).ok_or_else(|| {
-            anyhow::anyhow!(
-                "Unknown whisper model preset '{}'. Valid presets: tiny, tiny.en, base, base.en, \
-                 small, small.en, medium, medium.en, large-v1, large-v2, large-v3, \
-                 large-v3-turbo, distil-large-v3, distil-large-v3.5",
-                preset
-            )
-        })?;
-        (r.to_string(), f.to_string())
-    } else {
-        (config.model_repo.clone(), config.model_file.clone())
-    };
-
-    log::info!("Downloading model {}/{} from HuggingFace...", repo, file);
-    let api = hf_hub::api::sync::Api::new()?;
-    let hf_repo = api.model(repo);
-    let path = hf_repo.get(&file)?;
-    log::info!("Model ready at {}", path.display());
-    Ok(path)
+    Ok(ModelPaths {
+        encoder: paths[0].clone(),
+        decoder: paths[1].clone(),
+        joiner: paths[2].clone(),
+        tokens: paths[3].clone(),
+    })
 }
 
-pub fn resolve_sherpa_model_paths(config: &Config) -> Result<SherpaModelPaths> {
-    if let Some(ref preset) = config.model {
-        let (repo, files) = resolve_sherpa_preset(preset).ok_or_else(|| {
-            anyhow::anyhow!(
-                "Unknown sherpa model preset '{}'. Valid presets: parakeet-tdt-0.6b-v3",
-                preset
-            )
-        })?;
+pub fn run_wizard() -> Result<()> {
+    use dialoguer::Select;
 
-        log::info!("Downloading sherpa model files from {repo}...");
-        let api = hf_hub::api::sync::Api::new()?;
-        let hf_repo = api.model(repo.to_string());
+    println!("whisp-rs configuration wizard\n");
 
-        let mut paths = Vec::new();
-        for file in files {
-            let path = hf_repo.get(file)?;
-            log::info!("  {} ready at {}", file, path.display());
-            paths.push(path);
-        }
+    // 1. Model selection
+    let presets = available_presets();
+    let model_idx = Select::new()
+        .with_prompt("Select model")
+        .items(presets)
+        .default(0)
+        .interact()?;
+    let model = presets[model_idx].to_string();
 
-        Ok(SherpaModelPaths {
-            encoder: paths[0].clone(),
-            decoder: paths[1].clone(),
-            joiner: paths[2].clone(),
-            tokens: paths[3].clone(),
-        })
+    // 2. Audio device selection
+    let sources = audio::list_pulse_sources()?;
+    let mut choices: Vec<String> = vec!["(default)".into()];
+    choices.extend(sources.iter().map(|(_, desc)| desc.clone()));
+    let dev_idx = Select::new()
+        .with_prompt("Select audio input device")
+        .items(&choices)
+        .default(0)
+        .interact()?;
+    let audio_device = if dev_idx == 0 {
+        String::new()
     } else {
-        anyhow::bail!("Sherpa backend requires a model preset (e.g. model = \"parakeet-tdt-0.6b-v3\")")
+        sources[dev_idx - 1].0.clone()
+    };
+
+    // 3. Hotkey selection
+    let hotkey_options = &["insert", "pause", "scrolllock", "f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10", "f11", "f12"];
+    let hotkey_idx = Select::new()
+        .with_prompt("Select push-to-talk hotkey")
+        .items(hotkey_options)
+        .default(0)
+        .interact()?;
+    let key_name = hotkey_options[hotkey_idx];
+
+    // Write config
+    let toml_content = format!(
+        r#"hotkey = "{key_name}"
+language = "en"
+audio_device = "{audio_device}"
+debounce_ms = 100
+model = "{model}"
+"#
+    );
+
+    let path = config_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
     }
+    fs::write(&path, &toml_content)?;
+    println!("\nConfig written to {}", path.display());
+
+    Ok(())
 }

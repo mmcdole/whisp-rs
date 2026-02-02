@@ -11,6 +11,7 @@ const TERMINAL_IDENTIFIERS: &[&str] = &[
     "kitty",
     "alacritty",
     "terminator",
+    "warp",
 ];
 
 #[derive(Debug, Clone, Copy)]

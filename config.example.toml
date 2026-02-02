@@ -10,36 +10,11 @@
 # Audio input device name (empty string = system default)
 # audio_device = ""
 
-# Beam search size (1 = greedy, 5 = default) — whisper backend only
-# beam_size = 5
-
 # Debounce time in milliseconds after transcription finishes
 # debounce_ms = 100
 
-# --- Backend selection ---
-# "whisper" (default) — uses whisper.cpp via whisper-rs
-# "sherpa"            — uses sherpa-onnx via sherpa-rs (e.g. for Parakeet TDT)
-# backend = "whisper"
-
 # --- Model selection ---
-# Use a named preset (easiest way to pick a model):
-# model = "medium.en"
+# Named preset for the speech-to-text model:
+#   parakeet-tdt-0.6b-v3  (default, NVIDIA Parakeet TDT 0.6B)
 #
-# Whisper presets:
-#   tiny, tiny.en, base, base.en, small, small.en,
-#   medium, medium.en,
-#   large-v1, large-v2, large-v3, large-v3-turbo,
-#   distil-large-v3, distil-large-v3.5
-#
-# Sherpa presets:
-#   parakeet-tdt-0.6b-v3
-#
-# --- OR specify repo + file manually (whisper backend) ---
-# model_repo = "ggerganov/whisper.cpp"
-# model_file = "ggml-medium.en.bin"
-#
-# --- OR point to a local file directly (whisper backend) ---
-# model_path = "/path/to/your/model.bin"
-
-# Use GPU acceleration if available (requires CUDA; whisper backend only)
-# use_gpu = true
+# model = "parakeet-tdt-0.6b-v3"

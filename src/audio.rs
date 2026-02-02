@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleRate, Stream, StreamConfig};
 use std::sync::{Arc, Mutex};
@@ -29,15 +29,12 @@ pub struct AudioCapture {
 
 impl AudioCapture {
     pub fn new(device_name: &str) -> Result<Self> {
+        if !device_name.is_empty() {
+            set_default_source(device_name)?;
+        }
         let host = cpal::default_host();
-        let device = if device_name.is_empty() {
-            host.default_input_device()
-                .ok_or_else(|| anyhow::anyhow!("No default input device"))?
-        } else {
-            host.input_devices()?
-                .find(|d| d.name().map_or(false, |n| n == device_name))
-                .ok_or_else(|| anyhow::anyhow!("Audio device '{}' not found", device_name))?
-        };
+        let device = host.default_input_device()
+            .ok_or_else(|| anyhow::anyhow!("No default input device"))?;
 
         log::info!("Using audio device: {}", device.name().unwrap_or_default());
 
@@ -103,17 +100,42 @@ impl AudioCapture {
     }
 }
 
-/// Verify we can list audio devices (useful for diagnostics).
-pub fn list_input_devices() -> Result<Vec<String>> {
-    let host = cpal::default_host();
-    let mut names = Vec::new();
-    for d in host.input_devices()? {
-        if let Ok(name) = d.name() {
-            names.push(name);
+/// List PulseAudio sources via `pactl`, returning (name, description) pairs.
+/// Filters out monitor sources (used for recording application output).
+pub fn list_pulse_sources() -> Result<Vec<(String, String)>> {
+    let output = std::process::Command::new("pactl")
+        .args(["-f", "json", "list", "sources"])
+        .output()
+        .context("Failed to run pactl — is PulseAudio/PipeWire installed?")?;
+    if !output.status.success() {
+        bail!("pactl failed: {}", String::from_utf8_lossy(&output.stderr));
+    }
+    let sources: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout)
+        .context("Failed to parse pactl JSON output")?;
+    let mut result = Vec::new();
+    for src in sources {
+        let name = src["name"].as_str().unwrap_or_default();
+        let desc = src["description"].as_str().unwrap_or_default();
+        // Skip monitor sources
+        if name.contains(".monitor") {
+            continue;
         }
+        result.push((name.to_string(), desc.to_string()));
     }
-    if names.is_empty() {
-        bail!("No audio input devices found");
+    if result.is_empty() {
+        bail!("No audio input sources found via PulseAudio");
     }
-    Ok(names)
+    Ok(result)
+}
+
+/// Set the PulseAudio default source so cpal picks it up.
+pub fn set_default_source(name: &str) -> Result<()> {
+    let status = std::process::Command::new("pactl")
+        .args(["set-default-source", name])
+        .status()
+        .context("Failed to run pactl set-default-source")?;
+    if !status.success() {
+        bail!("pactl set-default-source failed");
+    }
+    Ok(())
 }

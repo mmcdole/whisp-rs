@@ -10,23 +10,56 @@ pub enum HotkeyEvent {
     Released,
 }
 
+/// Parse a hotkey name (e.g. "insert", "f4", "leftctrl") to an evdev Key.
+/// Matches against `KEY_{NAME}` debug representation for all key codes 0..768.
 pub fn parse_hotkey(name: &str) -> Result<Key> {
-    match name.to_lowercase().as_str() {
-        "pause" => Ok(Key::KEY_PAUSE),
-        "f4" => Ok(Key::KEY_F4),
-        "f8" => Ok(Key::KEY_F8),
-        "insert" => Ok(Key::KEY_INSERT),
-        "f1" => Ok(Key::KEY_F1),
-        "f2" => Ok(Key::KEY_F2),
-        "f3" => Ok(Key::KEY_F3),
-        "f5" => Ok(Key::KEY_F5),
-        "f6" => Ok(Key::KEY_F6),
-        "f7" => Ok(Key::KEY_F7),
-        "f9" => Ok(Key::KEY_F9),
-        "f10" => Ok(Key::KEY_F10),
-        "f11" => Ok(Key::KEY_F11),
-        "f12" => Ok(Key::KEY_F12),
-        other => bail!("Unknown hotkey: {other}"),
+    let target = format!("KEY_{}", name.to_uppercase());
+    for code in 0..768u16 {
+        let key = Key::new(code);
+        if format!("{:?}", key) == target {
+            return Ok(key);
+        }
+    }
+    bail!("Unknown hotkey: {name}")
+}
+
+/// Convert an evdev Key to a lowercase name without the `KEY_` prefix.
+pub fn key_to_name(key: Key) -> String {
+    let dbg = format!("{:?}", key);
+    dbg.strip_prefix("KEY_")
+        .unwrap_or(&dbg)
+        .to_lowercase()
+}
+
+/// Block until a key is pressed on any evdev device, return that key.
+pub fn wait_for_keypress() -> Result<Key> {
+    let mut devices: Vec<evdev::Device> = Vec::new();
+    for (path, device) in evdev::enumerate() {
+        if device.supported_keys().is_some() {
+            match evdev::Device::open(&path) {
+                Ok(dev) => devices.push(dev),
+                Err(_) => continue,
+            }
+        }
+    }
+    if devices.is_empty() {
+        bail!("No input devices found. Ensure you are in the 'input' group.");
+    }
+
+    // Poll all devices for a key-down event
+    loop {
+        for dev in &mut devices {
+            match dev.fetch_events() {
+                Ok(events) => {
+                    for ev in events {
+                        if ev.event_type() == evdev::EventType::KEY && ev.value() == 1 {
+                            return Ok(Key::new(ev.code()));
+                        }
+                    }
+                }
+                Err(_) => continue,
+            }
+        }
     }
 }
 

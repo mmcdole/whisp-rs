@@ -2,15 +2,9 @@
 name = "whisp-rs"
 version = "0.1.0"
 edition = "2021"
-description = "Push-to-talk speech-to-text using whisper.cpp"
-
-[features]
-default = ["cuda"]
-cuda = ["whisper-rs/cuda"]
+description = "Push-to-talk speech-to-text using sherpa-onnx"
 
 [dependencies]
-whisper-rs = "0.13"
-whisper-rs-sys = "0.11"
 cpal = "0.15"
 evdev = "0.12"
 toml = "0.8"
@@ -21,3 +15,5 @@ anyhow = "1"
 log = "0.4"
 env_logger = "0.11"
 sherpa-rs = "0.6"
+dialoguer = "0.11"
+serde_json = "1"

@@ -12,25 +12,14 @@ use std::time::{Duration, Instant};
 fn main() -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
-    let cfg = config::load_config()?;
-    log::info!("Config loaded: hotkey={}, language={}, backend={}", cfg.hotkey, cfg.language, cfg.backend);
+    if std::env::args().any(|a| a == "--config") {
+        return config::run_wizard();
+    }
 
-    let transcriber_init = match cfg.backend.as_str() {
-        "sherpa" => {
-            let paths = config::resolve_sherpa_model_paths(&cfg)?;
-            transcriber::TranscriberInit::Sherpa { paths }
-        }
-        "whisper" | _ => {
-            transcriber::install_log_callback();
-            let model_path = config::resolve_model_path(&cfg)?;
-            transcriber::TranscriberInit::Whisper {
-                model_path,
-                use_gpu: cfg.use_gpu,
-                language: cfg.language.clone(),
-                beam_size: cfg.beam_size,
-            }
-        }
-    };
+    let cfg = config::load_config()?;
+    log::info!("Config loaded: hotkey={}, language={}, model={}", cfg.hotkey, cfg.language, cfg.model);
+
+    let paths = config::resolve_model_paths(&cfg)?;
     log::info!("Model resolved");
 
     let audio_capture = audio::AudioCapture::new(&cfg.audio_device)?;
@@ -44,7 +33,7 @@ fn main() -> Result<()> {
     hotkey::spawn_listener(&cfg.hotkey, hotkey_tx)?;
 
     // Transcription worker
-    transcriber::spawn_worker(transcriber_init, audio_rx, text_tx);
+    transcriber::spawn_worker(paths, audio_rx, text_tx);
 
     // Text output thread
     std::thread::spawn(move || {
