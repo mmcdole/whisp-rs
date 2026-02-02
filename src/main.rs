@@ -13,13 +13,25 @@ fn main() -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     let cfg = config::load_config()?;
-    log::info!("Config loaded: hotkey={}, language={}, model_file={}", cfg.hotkey, cfg.language, cfg.model_file);
+    log::info!("Config loaded: hotkey={}, language={}, backend={}", cfg.hotkey, cfg.language, cfg.backend);
 
-    transcriber::install_log_callback();
-
-    let model_path = config::resolve_model_path(&cfg)?;
-    let ctx = transcriber::load_context(&model_path, cfg.use_gpu)?;
-    log::info!("Whisper model loaded");
+    let transcriber_init = match cfg.backend.as_str() {
+        "sherpa" => {
+            let paths = config::resolve_sherpa_model_paths(&cfg)?;
+            transcriber::TranscriberInit::Sherpa { paths }
+        }
+        "whisper" | _ => {
+            transcriber::install_log_callback();
+            let model_path = config::resolve_model_path(&cfg)?;
+            transcriber::TranscriberInit::Whisper {
+                model_path,
+                use_gpu: cfg.use_gpu,
+                language: cfg.language.clone(),
+                beam_size: cfg.beam_size,
+            }
+        }
+    };
+    log::info!("Model resolved");
 
     let audio_capture = audio::AudioCapture::new(&cfg.audio_device)?;
 
@@ -32,7 +44,7 @@ fn main() -> Result<()> {
     hotkey::spawn_listener(&cfg.hotkey, hotkey_tx)?;
 
     // Transcription worker
-    transcriber::spawn_worker(ctx, cfg.language.clone(), cfg.beam_size, audio_rx, text_tx);
+    transcriber::spawn_worker(transcriber_init, audio_rx, text_tx);
 
     // Text output thread
     std::thread::spawn(move || {
@@ -52,7 +64,6 @@ fn main() -> Result<()> {
 
     println!("whisp-rs ready. Hold {} to record.", cfg.hotkey);
 
-    let min_duration = Duration::from_secs_f64(cfg.min_recording_seconds);
     let debounce = Duration::from_millis(cfg.debounce_ms);
     let mut recording = false;
     let mut record_start = Instant::now();
@@ -80,10 +91,6 @@ fn main() -> Result<()> {
                 let audio = audio_capture.stop_recording();
                 last_stop = Instant::now();
                 let duration = record_start.elapsed();
-                if duration < min_duration {
-                    log::info!("Recording too short ({:.2}s), discarding", duration.as_secs_f64());
-                    continue;
-                }
                 if audio.is_empty() {
                     log::info!("No audio captured");
                     continue;

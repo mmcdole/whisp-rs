@@ -5,8 +5,8 @@ use std::path::PathBuf;
 
 const DEFAULT_CONFIG: &str = include_str!("../config.example.toml");
 
-/// Named model presets: (repo, file)
-fn resolve_preset(name: &str) -> Option<(&'static str, &'static str)> {
+/// Named model presets for whisper backend: (repo, file)
+fn resolve_whisper_preset(name: &str) -> Option<(&'static str, &'static str)> {
     Some(match name {
         "tiny" => ("ggerganov/whisper.cpp", "ggml-tiny.bin"),
         "tiny.en" => ("ggerganov/whisper.cpp", "ggml-tiny.en.bin"),
@@ -26,6 +26,18 @@ fn resolve_preset(name: &str) -> Option<(&'static str, &'static str)> {
     })
 }
 
+/// Named model presets for sherpa backend: (repo, &[files])
+/// Sherpa transducer models need encoder, decoder, joiner, and tokens files.
+fn resolve_sherpa_preset(name: &str) -> Option<(&'static str, &'static [&'static str])> {
+    Some(match name {
+        "parakeet-tdt-0.6b-v3" => (
+            "csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8",
+            &["encoder.int8.onnx", "decoder.int8.onnx", "joiner.int8.onnx", "tokens.txt"],
+        ),
+        _ => return None,
+    })
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -33,15 +45,25 @@ pub struct Config {
     pub language: String,
     pub audio_device: String,
     pub beam_size: i32,
-    pub min_recording_seconds: f64,
     pub debounce_ms: u64,
-    /// Named preset (e.g. "medium.en", "distil-large-v3"). Overrides model_repo/model_file.
+    /// Backend: "whisper" (default) or "sherpa"
+    pub backend: String,
+    /// Named preset (e.g. "medium.en", "distil-large-v3", "parakeet-tdt-0.6b-v3"). Overrides model_repo/model_file.
     pub model: Option<String>,
     pub model_repo: String,
     pub model_file: String,
     pub model_path: Option<String>,
     /// Use GPU for inference if available (default: true)
     pub use_gpu: bool,
+}
+
+/// Resolved paths for sherpa transducer model files.
+#[derive(Debug)]
+pub struct SherpaModelPaths {
+    pub encoder: PathBuf,
+    pub decoder: PathBuf,
+    pub joiner: PathBuf,
+    pub tokens: PathBuf,
 }
 
 impl Default for Config {
@@ -51,8 +73,8 @@ impl Default for Config {
             language: "en".into(),
             audio_device: String::new(),
             beam_size: 5,
-            min_recording_seconds: 1.0,
             debounce_ms: 100,
+            backend: "whisper".into(),
             model: Some("distil-large-v3".into()),
             model_repo: "ggerganov/whisper.cpp".into(),
             model_file: "ggml-medium.en.bin".into(),
@@ -96,9 +118,9 @@ pub fn resolve_model_path(config: &Config) -> Result<PathBuf> {
 
     // 2. Named preset or manual repo/file
     let (repo, file) = if let Some(ref preset) = config.model {
-        let (r, f) = resolve_preset(preset).ok_or_else(|| {
+        let (r, f) = resolve_whisper_preset(preset).ok_or_else(|| {
             anyhow::anyhow!(
-                "Unknown model preset '{}'. Valid presets: tiny, tiny.en, base, base.en, \
+                "Unknown whisper model preset '{}'. Valid presets: tiny, tiny.en, base, base.en, \
                  small, small.en, medium, medium.en, large-v1, large-v2, large-v3, \
                  large-v3-turbo, distil-large-v3, distil-large-v3.5",
                 preset
@@ -115,4 +137,35 @@ pub fn resolve_model_path(config: &Config) -> Result<PathBuf> {
     let path = hf_repo.get(&file)?;
     log::info!("Model ready at {}", path.display());
     Ok(path)
+}
+
+pub fn resolve_sherpa_model_paths(config: &Config) -> Result<SherpaModelPaths> {
+    if let Some(ref preset) = config.model {
+        let (repo, files) = resolve_sherpa_preset(preset).ok_or_else(|| {
+            anyhow::anyhow!(
+                "Unknown sherpa model preset '{}'. Valid presets: parakeet-tdt-0.6b-v3",
+                preset
+            )
+        })?;
+
+        log::info!("Downloading sherpa model files from {repo}...");
+        let api = hf_hub::api::sync::Api::new()?;
+        let hf_repo = api.model(repo.to_string());
+
+        let mut paths = Vec::new();
+        for file in files {
+            let path = hf_repo.get(file)?;
+            log::info!("  {} ready at {}", file, path.display());
+            paths.push(path);
+        }
+
+        Ok(SherpaModelPaths {
+            encoder: paths[0].clone(),
+            decoder: paths[1].clone(),
+            joiner: paths[2].clone(),
+            tokens: paths[3].clone(),
+        })
+    } else {
+        anyhow::bail!("Sherpa backend requires a model preset (e.g. model = \"parakeet-tdt-0.6b-v3\")")
+    }
 }

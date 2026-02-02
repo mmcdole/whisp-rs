@@ -1,0 +1,5 @@
+[env]
+# CUDA 13+ dropped old architectures (compute_52, compute_61) and requires C++17.
+# whisper-rs-sys reads CMAKE_* env vars and passes them as -D flags to cmake.
+CMAKE_CUDA_ARCHITECTURES = "native"
+CMAKE_CUDA_STANDARD = "17"
