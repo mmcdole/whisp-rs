@@ -23,46 +23,6 @@ pub fn parse_hotkey(name: &str) -> Result<Key> {
     bail!("Unknown hotkey: {name}")
 }
 
-/// Convert an evdev Key to a lowercase name without the `KEY_` prefix.
-pub fn key_to_name(key: Key) -> String {
-    let dbg = format!("{:?}", key);
-    dbg.strip_prefix("KEY_")
-        .unwrap_or(&dbg)
-        .to_lowercase()
-}
-
-/// Block until a key is pressed on any evdev device, return that key.
-pub fn wait_for_keypress() -> Result<Key> {
-    let mut devices: Vec<evdev::Device> = Vec::new();
-    for (path, device) in evdev::enumerate() {
-        if device.supported_keys().is_some() {
-            match evdev::Device::open(&path) {
-                Ok(dev) => devices.push(dev),
-                Err(_) => continue,
-            }
-        }
-    }
-    if devices.is_empty() {
-        bail!("No input devices found. Ensure you are in the 'input' group.");
-    }
-
-    // Poll all devices for a key-down event
-    loop {
-        for dev in &mut devices {
-            match dev.fetch_events() {
-                Ok(events) => {
-                    for ev in events {
-                        if ev.event_type() == evdev::EventType::KEY && ev.value() == 1 {
-                            return Ok(Key::new(ev.code()));
-                        }
-                    }
-                }
-                Err(_) => continue,
-            }
-        }
-    }
-}
-
 fn find_devices_with_key(target: Key) -> Vec<PathBuf> {
     let mut paths = Vec::new();
     for (path, device) in evdev::enumerate() {

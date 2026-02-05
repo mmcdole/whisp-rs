@@ -1,9 +1,10 @@
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use std::fs;
 use std::path::PathBuf;
 
 use crate::audio;
+use crate::hotkey;
 
 const DEFAULT_CONFIG: &str = include_str!("../config.example.toml");
 
@@ -55,10 +56,52 @@ impl Default for Config {
     }
 }
 
+impl Config {
+    /// Validate configuration values.
+    ///
+    /// Checks:
+    /// - Hotkey is a valid evdev key name
+    /// - debounce_ms is within reasonable bounds (0-5000)
+    /// - Model preset exists
+    pub fn validate(&self) -> Result<()> {
+        // Validate hotkey
+        hotkey::parse_hotkey(&self.hotkey).with_context(|| {
+            format!(
+                "Invalid hotkey '{}'. Valid examples: insert, f1-f12, pause, scrolllock",
+                self.hotkey
+            )
+        })?;
+
+        // Validate debounce range
+        if self.debounce_ms > 5000 {
+            bail!(
+                "debounce_ms {} exceeds maximum of 5000ms. Use a value between 0-5000.",
+                self.debounce_ms
+            );
+        }
+
+        // Validate model preset
+        if resolve_preset(&self.model).is_none() {
+            bail!(
+                "Unknown model '{}'. Available presets: {}",
+                self.model,
+                available_presets().join(", ")
+            );
+        }
+
+        Ok(())
+    }
+}
+
 fn config_path() -> PathBuf {
     dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("~/.config"))
-        .join("whisp-rs")
+        .or_else(|| {
+            std::env::var("HOME")
+                .ok()
+                .map(|h| PathBuf::from(h).join(".config"))
+        })
+        .unwrap_or_else(|| PathBuf::from("/tmp"))
+        .join("whisp")
         .join("config.toml")
 }
 
@@ -70,12 +113,15 @@ pub fn load_config() -> Result<Config> {
         }
         fs::write(&path, DEFAULT_CONFIG)?;
         log::info!("Created default config at {}", path.display());
-        return Ok(Config::default());
+        let config = Config::default();
+        config.validate()?;
+        return Ok(config);
     }
     let text = fs::read_to_string(&path)
         .with_context(|| format!("reading config from {}", path.display()))?;
     let config: Config = toml::from_str(&text)
         .with_context(|| format!("parsing config from {}", path.display()))?;
+    config.validate()?;
     Ok(config)
 }
 
@@ -109,7 +155,7 @@ pub fn resolve_model_paths(config: &Config) -> Result<ModelPaths> {
 pub fn run_wizard() -> Result<()> {
     use dialoguer::Select;
 
-    println!("whisp-rs configuration wizard\n");
+    println!("whisp configuration wizard\n");
 
     // 1. Model selection
     let presets = available_presets();

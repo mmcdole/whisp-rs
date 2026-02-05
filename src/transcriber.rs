@@ -1,7 +1,7 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::collections::VecDeque;
 use std::sync::mpsc;
-use std::thread;
+use std::thread::{self, JoinHandle};
 
 use sherpa_rs::transducer::{TransducerConfig, TransducerRecognizer};
 
@@ -37,28 +37,42 @@ impl Transcriber {
     }
 }
 
+/// Spawns the transcription worker thread.
+///
+/// Returns an error if the model fails to load (e.g., missing or corrupt files).
+/// This validates the model before spawning the thread to provide immediate feedback.
 pub fn spawn_worker(
     paths: crate::config::ModelPaths,
     audio_rx: mpsc::Receiver<Vec<f32>>,
     text_tx: mpsc::Sender<String>,
-) {
-    thread::spawn(move || {
-        let mut transcriber =
-            Transcriber::new(&paths).expect("failed to init sherpa backend");
+) -> Result<JoinHandle<()>> {
+    // Validate model loads BEFORE spawning thread for immediate error feedback
+    let transcriber = Transcriber::new(&paths).with_context(|| {
+        format!(
+            "Failed to load model from {}. Try deleting ~/.cache/huggingface and re-running.",
+            paths.encoder.display()
+        )
+    })?;
 
+    let handle = thread::spawn(move || {
+        let mut transcriber = transcriber;
         log::info!("Transcription worker ready");
 
         let mut queue: VecDeque<Vec<f32>> = VecDeque::with_capacity(MAX_QUEUE);
         loop {
             let audio = match audio_rx.recv() {
                 Ok(a) => a,
-                Err(_) => break,
+                Err(_) => {
+                    log::debug!("Audio channel closed, transcriber shutting down");
+                    break;
+                }
             };
             queue.push_back(audio);
 
             while let Ok(a) = audio_rx.try_recv() {
                 queue.push_back(a);
                 if queue.len() > MAX_QUEUE {
+                    log::warn!("Transcription queue overflow, dropping oldest recording");
                     queue.pop_front();
                 }
             }
@@ -74,4 +88,6 @@ pub fn spawn_worker(
             }
         }
     });
+
+    Ok(handle)
 }

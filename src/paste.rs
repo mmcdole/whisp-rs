@@ -1,17 +1,59 @@
 use std::process::Command;
 use std::sync::OnceLock;
 
+/// Known terminal application identifiers (class names or app_ids).
+/// Uses exact matching to avoid false positives like "determine" matching "term".
 const TERMINAL_IDENTIFIERS: &[&str] = &[
+    // Generic
     "terminal",
-    "term",
-    "konsole",
-    "xterm",
-    "rxvt",
-    "urxvt",
+    "gnome-terminal",
+    "gnome-terminal-server",
+    "mate-terminal",
+    "xfce4-terminal",
+    "lxterminal",
+    "qterminal",
+    "deepin-terminal",
+    "elementary-terminal",
+    "pantheon-terminal",
+    "tilix",
+    "guake",
+    "tilda",
+    "yakuake",
+    "terminology",
+    "terminator",
+    "termite",
+    "termit",
+    // Popular modern terminals
     "kitty",
     "alacritty",
-    "terminator",
+    "wezterm",
+    "ghostty",
+    "foot",
+    "rio",
     "warp",
+    "hyper",
+    "tabby",
+    "contour",
+    "cool-retro-term",
+    // Classic terminals
+    "xterm",
+    "xterm-256color",
+    "uxterm",
+    "rxvt",
+    "urxvt",
+    "mrxvt",
+    "aterm",
+    "eterm",
+    "st",
+    "st-256color",
+    "sakura",
+    // KDE
+    "konsole",
+    "konsolepart",
+    "yakuake",
+    // Multiplexers (when detected as window class)
+    "tmux",
+    "screen",
 ];
 
 #[derive(Debug, Clone, Copy)]
@@ -91,7 +133,7 @@ fn get_backend() -> PasteBackend {
 
 fn is_terminal_class(name: &str) -> bool {
     let lower = name.to_lowercase();
-    TERMINAL_IDENTIFIERS.iter().any(|t| lower.contains(t))
+    TERMINAL_IDENTIFIERS.iter().any(|t| lower == *t)
 }
 
 // --- X11 ---

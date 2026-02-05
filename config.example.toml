@@ -1,5 +1,5 @@
-# whisp-rs configuration
-# Place this file at ~/.config/whisp-rs/config.toml
+# whisp configuration
+# Place this file at ~/.config/whisp/config.toml
 
 # Hotkey to hold for recording (insert, pause, f4, f8)
 # hotkey = "insert"
