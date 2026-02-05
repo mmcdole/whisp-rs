@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 cargo build                    # debug build
 cargo build --release          # release build
-cargo run                      # run (needs config at ~/.config/whisp-rs/config.toml)
+cargo run                      # run (needs config at ~/.config/whisp/config.toml)
 RUST_LOG=debug cargo run       # run with debug logging
 ```
 
@@ -15,7 +15,7 @@ No tests or lints are configured yet.
 
 ## Architecture
 
-whisp-rs is a Linux push-to-talk speech-to-text tool. It listens for a hotkey, captures audio, transcribes via sherpa-onnx (Parakeet TDT), and pastes the result into the active window.
+whisp is a Linux push-to-talk speech-to-text tool. It listens for a hotkey, captures audio, transcribes via sherpa-onnx (Parakeet TDT), and pastes the result into the active window.
 
 **Main loop (`main.rs`)** orchestrates everything via mpsc channels across ~5 threads:
 

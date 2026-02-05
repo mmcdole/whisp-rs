@@ -247,8 +247,13 @@ fn do_paste(backend: PasteBackend, is_terminal: bool) {
             Command::new("xdotool").args(["key", combo]).status()
         }
         PasteBackend::Wtype => {
-            let combo = if is_terminal { "ctrl+shift+v" } else { "ctrl+v" };
-            Command::new("wtype").arg(combo).status()
+            let mut cmd = Command::new("wtype");
+            cmd.args(["-M", "ctrl"]);
+            if is_terminal {
+                cmd.args(["-M", "shift"]);
+            }
+            cmd.args(["-k", "v"]);
+            cmd.status()
         }
         PasteBackend::Ydotool => {
             let keys = if is_terminal {
