@@ -37,6 +37,16 @@ impl Transcriber {
     }
 }
 
+pub fn validate_model(paths: &crate::config::ModelPaths) -> Result<()> {
+    let _ = Transcriber::new(paths).with_context(|| {
+        format!(
+            "Failed to load model from {}. Try deleting ~/.cache/huggingface and re-running.",
+            paths.encoder.display()
+        )
+    })?;
+    Ok(())
+}
+
 /// Spawns the transcription worker thread.
 ///
 /// Returns an error if the model fails to load (e.g., missing or corrupt files).

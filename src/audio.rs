@@ -27,13 +27,20 @@ pub struct AudioCapture {
     _stream: Stream,
 }
 
+#[derive(Debug, Clone)]
+pub struct InputSource {
+    pub name: String,
+    pub description: String,
+}
+
 impl AudioCapture {
     pub fn new(device_name: &str) -> Result<Self> {
         if !device_name.is_empty() {
             set_default_source(device_name)?;
         }
         let host = cpal::default_host();
-        let device = host.default_input_device()
+        let device = host
+            .default_input_device()
             .ok_or_else(|| anyhow::anyhow!("No default input device"))?;
 
         log::info!("Using audio device: {}", device.name().unwrap_or_default());
@@ -100,31 +107,43 @@ impl AudioCapture {
     }
 }
 
-/// List PulseAudio sources via `pactl`, returning (name, description) pairs.
-/// Filters out monitor sources (used for recording application output).
-pub fn list_pulse_sources() -> Result<Vec<(String, String)>> {
+/// Lists PulseAudio/PipeWire input sources and their descriptions.
+///
+/// `name` is the value to use in config `audio_device`.
+pub fn list_input_sources() -> Result<Vec<InputSource>> {
     let output = std::process::Command::new("pactl")
         .args(["-f", "json", "list", "sources"])
         .output()
-        .context("Failed to run pactl — is PulseAudio/PipeWire installed?")?;
+        .context("Failed to run pactl. Install pulseaudio-utils or pipewire-pulse.")?;
     if !output.status.success() {
         bail!("pactl failed: {}", String::from_utf8_lossy(&output.stderr));
     }
-    let sources: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout)
-        .context("Failed to parse pactl JSON output")?;
+
+    let sources: Vec<serde_json::Value> =
+        serde_json::from_slice(&output.stdout).context("Failed to parse pactl JSON output")?;
     let mut result = Vec::new();
-    for src in sources {
-        let name = src["name"].as_str().unwrap_or_default();
-        let desc = src["description"].as_str().unwrap_or_default();
-        // Skip monitor sources
-        if name.contains(".monitor") {
+    for source in sources {
+        let name = source["name"].as_str().unwrap_or("").trim();
+        if name.is_empty() || name.contains(".monitor") {
             continue;
         }
-        result.push((name.to_string(), desc.to_string()));
+
+        let description = source["description"]
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(name);
+
+        result.push(InputSource {
+            name: name.to_string(),
+            description: description.to_string(),
+        });
     }
+
     if result.is_empty() {
-        bail!("No audio input sources found via PulseAudio");
+        bail!("No input sources found via pactl");
     }
+
     Ok(result)
 }
 

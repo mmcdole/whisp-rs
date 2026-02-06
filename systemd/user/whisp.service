@@ -6,9 +6,10 @@ PartOf=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart=%h/.local/bin/whisp
+ExecStart=%h/.local/bin/whisp --config %h/.config/whisp/config.toml
 Restart=on-failure
 RestartSec=2
+Environment=RUST_LOG=info
 NoNewPrivileges=yes
 
 [Install]

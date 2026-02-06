@@ -2,15 +2,31 @@ mod audio;
 mod clipboard;
 mod config;
 mod hotkey;
+mod output;
 mod paste;
 mod transcriber;
+mod util;
 
-use anyhow::Result;
+use anyhow::{bail, Result};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+#[derive(Default, Debug)]
+struct CliOptions {
+    show_help: bool,
+    show_version: bool,
+    list_hotkeys: bool,
+    list_audio_devices: bool,
+    write_default_config: bool,
+    force: bool,
+    config_path: Option<PathBuf>,
+    check_only: bool,
+    predownload_model: bool,
+}
 
 fn print_help() {
     println!(
@@ -20,55 +36,153 @@ USAGE:
     whisp [OPTIONS]
 
 OPTIONS:
-    --help      Show this help message
-    --version   Show version information
-    --config    Run the configuration wizard
+    --help, -h                   Show this help message
+    --version, -V                Show version information
+    --list-hotkeys               List all recognized evdev key names
+    --list-audio-devices         List available input source names for config
+    --write-default-config       Write default config to --config path (or default path)
+    --force                      Overwrite file when used with --write-default-config
+    --config <path>              Override config file path
+    --check                      Validate dependencies, config, and model availability
+    --predownload-model          Download model files and exit
 
 EXAMPLES:
-    whisp              Start whisp with existing config
-    whisp --config     Configure hotkey, audio device, and model
+    whisp
+    whisp --list-hotkeys
+    whisp --list-audio-devices
+    whisp --write-default-config --config ~/.config/whisp/config.toml
+    whisp --config ~/.config/whisp/config.toml
+    whisp --check
+    whisp --predownload-model
 
 CONFIGURATION:
-    Config file: ~/.config/whisp/config.toml
+    Default config: ~/.config/whisp/config.toml
+    Default hotkey: insert
 
 REQUIREMENTS:
-    - User must be in the 'input' group for hotkey detection
-    - Clipboard: xclip (X11) or wl-copy/wl-paste (Wayland)
-    - Paste: xdotool (X11) or wtype/ydotool (Wayland)
-    - Audio: PulseAudio or PipeWire with pactl"#
+    - User must be in the 'input' group for hotkey detection (/dev/input/event*)
+    - Paste mode: xclip (X11) or wl-copy/wl-paste (Wayland)
+    - Input injection: xdotool (X11) or wtype/ydotool (Wayland)
+    - Audio device override by name: pactl (PulseAudio/PipeWire)"#
     );
 }
 
-fn check_runtime_deps() -> Result<()> {
-    let is_wayland = std::env::var("WAYLAND_DISPLAY").is_ok();
-    let mut missing = Vec::new();
+fn parse_args() -> Result<CliOptions> {
+    let mut opts = CliOptions::default();
+    let mut args = std::env::args().skip(1).peekable();
 
-    // Check clipboard tools
-    let has_xclip = has_command("xclip");
-    let has_wl_copy = has_command("wl-copy") && has_command("wl-paste");
-
-    if is_wayland && !has_wl_copy {
-        missing.push("wl-clipboard (wl-copy, wl-paste) for Wayland clipboard");
-    } else if !is_wayland && !has_xclip {
-        missing.push("xclip for X11 clipboard");
-    }
-
-    // Check paste tools
-    let has_xdotool = has_command("xdotool");
-    let has_wtype = has_command("wtype");
-    let has_ydotool = has_command("ydotool");
-
-    if is_wayland {
-        if !has_wtype && !has_ydotool {
-            missing.push("wtype or ydotool for Wayland text paste");
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--help" | "-h" => opts.show_help = true,
+            "--version" | "-V" => opts.show_version = true,
+            "--list-hotkeys" => opts.list_hotkeys = true,
+            "--list-audio-devices" => opts.list_audio_devices = true,
+            "--write-default-config" => opts.write_default_config = true,
+            "--force" => opts.force = true,
+            "--check" => opts.check_only = true,
+            "--predownload-model" => opts.predownload_model = true,
+            "--config" => {
+                let Some(path) = args.next() else {
+                    bail!(
+                        "The --config flag now requires a file path. Interactive setup was removed.\n\
+                         Example: whisp --config ~/.config/whisp/config.toml"
+                    );
+                };
+                if path.starts_with('-') {
+                    bail!("Expected path after --config, got flag '{path}'");
+                }
+                opts.config_path = Some(PathBuf::from(path));
+            }
+            other if other.starts_with("--config=") => {
+                let path = other.trim_start_matches("--config=");
+                if path.is_empty() {
+                    bail!("--config= requires a non-empty path");
+                }
+                opts.config_path = Some(PathBuf::from(path));
+            }
+            other => {
+                bail!("Unknown option: {other}. Run 'whisp --help' for usage.");
+            }
         }
-    } else if !has_xdotool {
-        missing.push("xdotool for X11 text paste");
     }
 
-    // Check pactl for audio device selection
-    if !has_command("pactl") {
-        missing.push("pactl (pulseaudio-utils or pipewire-pulse) for audio device selection");
+    if opts.force && !opts.write_default_config {
+        bail!("--force is only valid with --write-default-config");
+    }
+
+    Ok(opts)
+}
+
+fn check_runtime_deps(config: &config::Config) -> Result<()> {
+    let is_wayland = util::is_wayland();
+    let mut missing: Vec<String> = Vec::new();
+
+    match config.output.mode {
+        config::OutputMode::Paste => {
+            let has_xclip = has_command("xclip");
+            let has_wl_copy = has_command("wl-copy") && has_command("wl-paste");
+            if is_wayland && !has_wl_copy {
+                missing.push("wl-clipboard (wl-copy, wl-paste) for Wayland clipboard".to_string());
+            } else if !is_wayland && !has_xclip {
+                missing.push("xclip for X11 clipboard".to_string());
+            }
+
+            if !is_wayland && !config.output.paste.app_overrides.is_empty() && !has_command("xprop")
+            {
+                missing.push(
+                    "xprop for X11 app detection when output.paste.app_overrides are configured"
+                        .to_string(),
+                );
+            }
+
+            if let Err(err) = paste::detect_auto_backend() {
+                missing.push(format!("Input injection backend unavailable: {err}"));
+            }
+        }
+        config::OutputMode::Type => {
+            let backend_check = match config.output.type_mode.backend {
+                config::TypeBackend::Auto => paste::detect_auto_backend().map(|_| ()),
+                config::TypeBackend::Xdotool => {
+                    if has_command("xdotool") {
+                        Ok(())
+                    } else {
+                        Err(anyhow::anyhow!("xdotool is not installed"))
+                    }
+                }
+                config::TypeBackend::Wtype => {
+                    if has_command("wtype") {
+                        Ok(())
+                    } else {
+                        Err(anyhow::anyhow!("wtype is not installed"))
+                    }
+                }
+                config::TypeBackend::Ydotool => {
+                    if has_command("ydotool") {
+                        Ok(())
+                    } else {
+                        Err(anyhow::anyhow!("ydotool is not installed"))
+                    }
+                }
+            };
+            if let Err(err) = backend_check {
+                missing.push(format!(
+                    "Typing backend '{}' unavailable: {err}",
+                    match config.output.type_mode.backend {
+                        config::TypeBackend::Auto => "auto",
+                        config::TypeBackend::Xdotool => "xdotool",
+                        config::TypeBackend::Wtype => "wtype",
+                        config::TypeBackend::Ydotool => "ydotool",
+                    }
+                ));
+            }
+        }
+    }
+
+    if !config.audio_device.is_empty() && !has_command("pactl") {
+        missing.push(
+            "pactl (pulseaudio-utils or pipewire-pulse) is required when audio_device is set"
+                .to_string(),
+        );
     }
 
     if !missing.is_empty() {
@@ -82,54 +196,92 @@ fn check_runtime_deps() -> Result<()> {
 }
 
 fn has_command(name: &str) -> bool {
-    std::process::Command::new("which")
-        .arg(name)
-        .output()
-        .map_or(false, |o| o.status.success())
+    util::has_command(name)
+}
+
+fn run_check(config: &config::Config) -> Result<()> {
+    check_runtime_deps(config)?;
+    let paths = config::resolve_model_paths(config)?;
+    transcriber::validate_model(&paths)?;
+    println!("whisp check OK");
+    Ok(())
+}
+
+fn print_audio_devices() -> Result<()> {
+    let devices = audio::list_input_sources()?;
+    println!("Available input sources (use `audio_device = \"<name>\"`):");
+    for source in devices {
+        println!("  {}  ({})", source.name, source.description);
+    }
+    Ok(())
 }
 
 fn main() -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
-    // Parse command line arguments
-    for arg in std::env::args().skip(1) {
-        match arg.as_str() {
-            "--help" | "-h" => {
-                print_help();
-                return Ok(());
-            }
-            "--version" | "-V" => {
-                println!("whisp {VERSION}");
-                return Ok(());
-            }
-            "--config" => {
-                return config::run_wizard();
-            }
-            other => {
-                eprintln!("Unknown option: {other}");
-                eprintln!("Run 'whisp --help' for usage.");
-                std::process::exit(1);
-            }
+    let cli = parse_args()?;
+    if cli.show_help {
+        print_help();
+        return Ok(());
+    }
+    if cli.show_version {
+        println!("whisp {VERSION}");
+        return Ok(());
+    }
+    if cli.list_hotkeys {
+        for key in hotkey::list_supported_hotkeys() {
+            println!("{key}");
         }
+        return Ok(());
+    }
+    if cli.list_audio_devices {
+        print_audio_devices()?;
+        return Ok(());
+    }
+    if cli.write_default_config {
+        let path = config::write_default_config(cli.config_path.as_deref(), cli.force)?;
+        println!("Wrote default config to {}", path.display());
+        return Ok(());
     }
 
-    // Check runtime dependencies before proceeding
-    check_runtime_deps()?;
+    let loaded = config::load_config(cli.config_path.as_deref())?;
+    if loaded.created {
+        log::info!(
+            "Created default config at {}",
+            loaded.path.to_string_lossy()
+        );
+    } else {
+        log::info!("Using config {}", loaded.path.to_string_lossy());
+    }
 
-    let cfg = config::load_config()?;
+    if cli.predownload_model {
+        let _ = config::resolve_model_paths(&loaded.config)?;
+        println!(
+            "Model '{}' is available in cache: {}",
+            loaded.config.model,
+            config::model_cache_hint().display()
+        );
+        return Ok(());
+    }
+
+    if cli.check_only {
+        run_check(&loaded.config)?;
+        return Ok(());
+    }
+
+    check_runtime_deps(&loaded.config)?;
+
     log::info!(
-        "Config loaded: hotkey={}, language={}, model={}",
-        cfg.hotkey,
-        cfg.language,
-        cfg.model
+        "Config loaded: hotkey={}, model={}",
+        loaded.config.hotkey,
+        loaded.config.model
     );
 
-    let paths = config::resolve_model_paths(&cfg)?;
+    let paths = config::resolve_model_paths(&loaded.config)?;
     log::info!("Model resolved");
 
-    let audio_capture = audio::AudioCapture::new(&cfg.audio_device)?;
+    let audio_capture = audio::AudioCapture::new(&loaded.config.audio_device)?;
 
-    // Set up graceful shutdown
     let shutdown = Arc::new(AtomicBool::new(false));
     let shutdown_handler = shutdown.clone();
     ctrlc::set_handler(move || {
@@ -137,47 +289,38 @@ fn main() -> Result<()> {
         shutdown_handler.store(true, Ordering::SeqCst);
     })?;
 
-    // Channels
     let (hotkey_tx, hotkey_rx) = mpsc::channel();
     let (audio_tx, audio_rx) = mpsc::channel::<Vec<f32>>();
     let (text_tx, text_rx) = mpsc::channel::<String>();
 
-    // Hotkey listener
-    hotkey::spawn_listener(&cfg.hotkey, hotkey_tx)?;
-
-    // Transcription worker
+    hotkey::spawn_listener(&loaded.config.hotkey, hotkey_tx)?;
     transcriber::spawn_worker(paths, audio_rx, text_tx)?;
 
-    // Text output thread
+    let output_cfg = loaded.config.output.clone();
     std::thread::spawn(move || {
         for text in text_rx {
             log::info!("Transcribed: {text}");
-            let original = clipboard::backup();
-            if clipboard::set(&text).is_ok() {
-                std::thread::sleep(Duration::from_millis(10));
-                paste::paste_to_active_window();
-                std::thread::sleep(Duration::from_millis(500));
-            } else {
-                log::error!("Failed to set clipboard");
+            if let Err(err) = output::emit_text(&output_cfg, &text) {
+                log::error!("Failed to emit output text: {err}");
             }
-            clipboard::restore(original);
         }
     });
 
-    println!("whisp ready. Hold {} to record. Press Ctrl+C to exit.", cfg.hotkey);
+    println!(
+        "whisp ready. Hold {} to record. Press Ctrl+C to exit.",
+        loaded.config.hotkey
+    );
 
-    let debounce = Duration::from_millis(cfg.debounce_ms);
+    let debounce = Duration::from_millis(loaded.config.debounce_ms);
     let mut recording = false;
     let mut record_start = Instant::now();
-    let mut last_stop = Instant::now() - debounce; // allow immediate first use
+    let mut last_stop = Instant::now() - debounce;
 
     loop {
-        // Check for shutdown
         if shutdown.load(Ordering::SeqCst) {
             break;
         }
 
-        // Use recv_timeout to allow periodic shutdown checks
         let event = match hotkey_rx.recv_timeout(Duration::from_millis(100)) {
             Ok(event) => event,
             Err(mpsc::RecvTimeoutError::Timeout) => continue,
@@ -218,7 +361,6 @@ fn main() -> Result<()> {
         }
     }
 
-    // Clean shutdown - drop audio_tx to signal transcriber to exit
     drop(audio_tx);
     log::info!("Goodbye!");
 

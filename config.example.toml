@@ -1,20 +1,45 @@
 # whisp configuration
-# Place this file at ~/.config/whisp/config.toml
-
-# Hotkey to hold for recording (insert, pause, f4, f8)
-# hotkey = "insert"
-
-# Language code (en, fr, de, es, etc.) or empty for auto-detect
-# language = "en"
-
-# Audio input device name (empty string = system default)
-# audio_device = ""
-
-# Debounce time in milliseconds after transcription finishes
-# debounce_ms = 100
-
-# --- Model selection ---
-# Named preset for the speech-to-text model:
-#   parakeet-tdt-0.6b-v3  (default, NVIDIA Parakeet TDT 0.6B)
+# Path: ~/.config/whisp/config.toml
 #
-# model = "parakeet-tdt-0.6b-v3"
+# Hotkey notes:
+# - `hotkey` is a single evdev key (not a key chord).
+# - Any evdev key name is valid (e.g. a, f13, leftctrl, rightmeta, micmute).
+# - Run `whisp --list-hotkeys` to print all recognized key names.
+# - Aliases accepted: ctrl, shift, alt, super, meta.
+hotkey = "insert"
+
+# Audio input source name from `whisp --list-audio-devices`.
+# Empty string uses current system default source.
+audio_device = ""
+
+# Debounce delay after transcription completes.
+debounce_ms = 100
+
+# Named model preset.
+model = "parakeet-tdt-0.6b-v3"
+
+[output]
+# "paste" or "type"
+mode = "paste"
+
+[output.paste]
+# Used when no override matches focused app
+default_combo = "ctrl+v"
+
+# Exact lowercased app_id / WM_CLASS token -> key combo
+[output.paste.app_overrides]
+alacritty = "ctrl+shift+v"
+kitty = "ctrl+shift+v"
+"org.wezfurlong.wezterm" = "ctrl+shift+v"
+"gnome-terminal-server" = "ctrl+shift+v"
+konsole = "ctrl+shift+v"
+"xfce4-terminal" = "ctrl+shift+v"
+tilix = "ctrl+shift+v"
+foot = "ctrl+shift+v"
+xterm = "shift+insert"
+ghostty = "ctrl+shift+v"
+
+[output.type]
+# auto | xdotool | wtype | ydotool
+backend = "auto"
+# Typing delay is always forced to 0 by whisp.
