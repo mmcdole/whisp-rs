@@ -38,6 +38,7 @@ tilix = "ctrl+shift+v"
 foot = "ctrl+shift+v"
 xterm = "shift+insert"
 ghostty = "ctrl+shift+v"
+"dev.warp.warp" = "ctrl+shift+v"
 
 [output.type]
 # auto | xdotool | wtype | ydotool

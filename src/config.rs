@@ -81,6 +81,7 @@ fn default_app_overrides() -> BTreeMap<String, String> {
         ("foot".to_string(), "ctrl+shift+v".to_string()),
         ("xterm".to_string(), "shift+insert".to_string()),
         ("ghostty".to_string(), "ctrl+shift+v".to_string()),
+        ("dev.warp.warp".to_string(), "ctrl+shift+v".to_string()),
     ])
 }
 
