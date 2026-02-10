@@ -17,30 +17,3 @@ debounce_ms = 100
 
 # Named model preset.
 model = "parakeet-tdt-0.6b-v3"
-
-[output]
-# "paste" or "type"
-mode = "paste"
-
-[output.paste]
-# Used when no override matches focused app
-default_combo = "ctrl+v"
-
-# Exact lowercased app_id / WM_CLASS token -> key combo
-[output.paste.app_overrides]
-alacritty = "ctrl+shift+v"
-kitty = "ctrl+shift+v"
-"org.wezfurlong.wezterm" = "ctrl+shift+v"
-"gnome-terminal-server" = "ctrl+shift+v"
-konsole = "ctrl+shift+v"
-"xfce4-terminal" = "ctrl+shift+v"
-tilix = "ctrl+shift+v"
-foot = "ctrl+shift+v"
-xterm = "shift+insert"
-ghostty = "ctrl+shift+v"
-"dev.warp.warp" = "ctrl+shift+v"
-
-[output.type]
-# auto | xdotool | wtype | ydotool
-backend = "auto"
-# Typing delay is always forced to 0 by whisp.

@@ -1,7 +1,6 @@
 use anyhow::{anyhow, bail, Context, Result};
 use hf_hub::{Repo, RepoType};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::thread;
@@ -17,105 +16,6 @@ struct ModelPreset {
     repo: &'static str,
     revision: &'static str,
     files: &'static [&'static str],
-}
-
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum OutputMode {
-    Paste,
-    Type,
-}
-
-impl Default for OutputMode {
-    fn default() -> Self {
-        Self::Paste
-    }
-}
-
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum TypeBackend {
-    Auto,
-    Xdotool,
-    Wtype,
-    Ydotool,
-}
-
-impl Default for TypeBackend {
-    fn default() -> Self {
-        Self::Auto
-    }
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct PasteOutputConfig {
-    pub default_combo: String,
-    pub app_overrides: BTreeMap<String, String>,
-}
-
-impl Default for PasteOutputConfig {
-    fn default() -> Self {
-        Self {
-            default_combo: "ctrl+v".to_string(),
-            app_overrides: default_app_overrides(),
-        }
-    }
-}
-
-fn default_app_overrides() -> BTreeMap<String, String> {
-    BTreeMap::from([
-        ("alacritty".to_string(), "ctrl+shift+v".to_string()),
-        ("kitty".to_string(), "ctrl+shift+v".to_string()),
-        (
-            "org.wezfurlong.wezterm".to_string(),
-            "ctrl+shift+v".to_string(),
-        ),
-        (
-            "gnome-terminal-server".to_string(),
-            "ctrl+shift+v".to_string(),
-        ),
-        ("konsole".to_string(), "ctrl+shift+v".to_string()),
-        ("xfce4-terminal".to_string(), "ctrl+shift+v".to_string()),
-        ("tilix".to_string(), "ctrl+shift+v".to_string()),
-        ("foot".to_string(), "ctrl+shift+v".to_string()),
-        ("xterm".to_string(), "shift+insert".to_string()),
-        ("ghostty".to_string(), "ctrl+shift+v".to_string()),
-        ("dev.warp.warp".to_string(), "ctrl+shift+v".to_string()),
-    ])
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct TypeOutputConfig {
-    pub backend: TypeBackend,
-}
-
-impl Default for TypeOutputConfig {
-    fn default() -> Self {
-        Self {
-            backend: TypeBackend::Auto,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct OutputConfig {
-    pub mode: OutputMode,
-    pub paste: PasteOutputConfig,
-    #[serde(rename = "type")]
-    pub type_mode: TypeOutputConfig,
-}
-
-impl Default for OutputConfig {
-    fn default() -> Self {
-        Self {
-            mode: OutputMode::Paste,
-            paste: PasteOutputConfig::default(),
-            type_mode: TypeOutputConfig::default(),
-        }
-    }
 }
 
 pub fn available_presets() -> &'static [&'static str] {
@@ -147,7 +47,6 @@ pub struct Config {
     pub debounce_ms: u64,
     /// Named preset (e.g. "parakeet-tdt-0.6b-v3").
     pub model: String,
-    pub output: OutputConfig,
 }
 
 /// Resolved paths for sherpa transducer model files.
@@ -173,7 +72,6 @@ impl Default for Config {
             audio_device: String::new(),
             debounce_ms: 100,
             model: "parakeet-tdt-0.6b-v3".into(),
-            output: OutputConfig::default(),
         }
     }
 }
@@ -181,19 +79,8 @@ impl Default for Config {
 impl Config {
     fn normalize(&mut self) {
         self.hotkey = hotkey::normalize_hotkey_name(&self.hotkey);
-        self.output.paste.default_combo = self.output.paste.default_combo.trim().to_string();
-
-        let normalized: BTreeMap<String, String> = self
-            .output
-            .paste
-            .app_overrides
-            .iter()
-            .map(|(app, combo)| (app.trim().to_ascii_lowercase(), combo.trim().to_string()))
-            .collect();
-        self.output.paste.app_overrides = normalized;
     }
 
-    /// Validate configuration values.
     pub fn validate(&self) -> Result<()> {
         hotkey::parse_hotkey(&self.hotkey).with_context(|| {
             format!(
@@ -215,27 +102,6 @@ impl Config {
                 self.model,
                 available_presets().join(", ")
             );
-        }
-
-        self.output.validate()?;
-
-        Ok(())
-    }
-}
-
-impl OutputConfig {
-    fn validate(&self) -> Result<()> {
-        if self.paste.default_combo.trim().is_empty() {
-            bail!("output.paste.default_combo must not be empty");
-        }
-
-        for (app, combo) in &self.paste.app_overrides {
-            if app.trim().is_empty() {
-                bail!("output.paste.app_overrides contains an empty app key");
-            }
-            if combo.trim().is_empty() {
-                bail!("output.paste.app_overrides['{app}'] has an empty combo");
-            }
         }
 
         Ok(())
@@ -403,32 +269,13 @@ fn download_with_retries(hf_repo: &hf_hub::api::sync::ApiRepo, file: &str) -> Re
 
 #[cfg(test)]
 mod tests {
-    use super::{Config, OutputMode, TypeBackend};
+    use super::Config;
     use std::path::Path;
 
     #[test]
     fn defaults_keep_insert_hotkey() {
         let cfg = Config::default();
         assert_eq!(cfg.hotkey, "insert");
-        assert_eq!(cfg.output.mode, OutputMode::Paste);
-        assert_eq!(cfg.output.type_mode.backend, TypeBackend::Auto);
-        assert_eq!(
-            cfg.output.paste.app_overrides.get("alacritty"),
-            Some(&"ctrl+shift+v".to_string())
-        );
-    }
-
-    #[test]
-    fn rejects_unknown_config_fields() {
-        let text = r#"
-hotkey = "insert"
-audio_device = ""
-debounce_ms = 100
-model = "parakeet-tdt-0.6b-v3"
-unexpected = true
-"#;
-        let result = toml::from_str::<Config>(text);
-        assert!(result.is_err(), "unknown fields must be rejected");
     }
 
     #[test]
@@ -445,25 +292,29 @@ model = "parakeet-tdt-0.6b-v3"
     }
 
     #[test]
-    fn normalizes_app_override_keys() {
+    fn rejects_unknown_config_fields() {
+        let text = r#"
+hotkey = "insert"
+audio_device = ""
+debounce_ms = 100
+model = "parakeet-tdt-0.6b-v3"
+unexpected = true
+"#;
+        let err = super::parse_config_text(Path::new("/tmp/test.toml"), text).unwrap_err();
+        assert!(format!("{err:#}").contains("unknown field"));
+    }
+
+    #[test]
+    fn rejects_legacy_output_block() {
         let text = r#"
 hotkey = "insert"
 audio_device = ""
 debounce_ms = 100
 model = "parakeet-tdt-0.6b-v3"
 [output]
-mode = "paste"
-[output.paste]
-default_combo = "ctrl+v"
-[output.paste.app_overrides]
-" Alacritty " = " ctrl+shift+v "
+mode = "type"
 "#;
-        let mut cfg = super::parse_config_text(Path::new("/tmp/test.toml"), text).unwrap();
-        cfg.normalize();
-        assert!(cfg.output.paste.app_overrides.contains_key("alacritty"));
-        assert_eq!(
-            cfg.output.paste.app_overrides.get("alacritty").unwrap(),
-            "ctrl+shift+v"
-        );
+        let err = super::parse_config_text(Path::new("/tmp/test.toml"), text).unwrap_err();
+        assert!(format!("{err:#}").contains("output"));
     }
 }

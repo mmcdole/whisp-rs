@@ -1,9 +1,5 @@
 use std::process::Command;
 
-pub fn is_wayland() -> bool {
-    std::env::var("WAYLAND_DISPLAY").is_ok()
-}
-
 pub fn has_command(name: &str) -> bool {
     Command::new(name)
         .arg("--version")

@@ -1,13 +1,12 @@
 mod audio;
-mod clipboard;
 mod config;
 mod hotkey;
 mod output;
-mod paste;
 mod transcriber;
+mod uinput;
 mod util;
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
@@ -60,9 +59,8 @@ CONFIGURATION:
     Default hotkey: insert
 
 REQUIREMENTS:
-    - User must be in the 'input' group for hotkey detection (/dev/input/event*)
-    - Paste mode: xclip (X11) or wl-copy/wl-paste (Wayland)
-    - Input injection: xdotool (X11) or wtype/ydotool (Wayland)
+    - User must be in the 'input' group for hotkey detection and typing
+    - /dev/uinput must be accessible (used for virtual keyboard input)
     - Audio device override by name: pactl (PulseAudio/PipeWire)"#
     );
 }
@@ -114,71 +112,15 @@ fn parse_args() -> Result<CliOptions> {
 }
 
 fn check_runtime_deps(config: &config::Config) -> Result<()> {
-    let is_wayland = util::is_wayland();
     let mut missing: Vec<String> = Vec::new();
 
-    match config.output.mode {
-        config::OutputMode::Paste => {
-            let has_xclip = has_command("xclip");
-            let has_wl_copy = has_command("wl-copy") && has_command("wl-paste");
-            if is_wayland && !has_wl_copy {
-                missing.push("wl-clipboard (wl-copy, wl-paste) for Wayland clipboard".to_string());
-            } else if !is_wayland && !has_xclip {
-                missing.push("xclip for X11 clipboard".to_string());
-            }
-
-            if !is_wayland && !config.output.paste.app_overrides.is_empty() && !has_command("xprop")
-            {
-                missing.push(
-                    "xprop for X11 app detection when output.paste.app_overrides are configured"
-                        .to_string(),
-                );
-            }
-
-            if let Err(err) = paste::detect_auto_backend() {
-                missing.push(format!("Input injection backend unavailable: {err}"));
-            }
-        }
-        config::OutputMode::Type => {
-            let backend_check = match config.output.type_mode.backend {
-                config::TypeBackend::Auto => paste::detect_auto_backend().map(|_| ()),
-                config::TypeBackend::Xdotool => {
-                    if has_command("xdotool") {
-                        Ok(())
-                    } else {
-                        Err(anyhow::anyhow!("xdotool is not installed"))
-                    }
-                }
-                config::TypeBackend::Wtype => {
-                    if has_command("wtype") {
-                        Ok(())
-                    } else {
-                        Err(anyhow::anyhow!("wtype is not installed"))
-                    }
-                }
-                config::TypeBackend::Ydotool => {
-                    if has_command("ydotool") {
-                        Ok(())
-                    } else {
-                        Err(anyhow::anyhow!("ydotool is not installed"))
-                    }
-                }
-            };
-            if let Err(err) = backend_check {
-                missing.push(format!(
-                    "Typing backend '{}' unavailable: {err}",
-                    match config.output.type_mode.backend {
-                        config::TypeBackend::Auto => "auto",
-                        config::TypeBackend::Xdotool => "xdotool",
-                        config::TypeBackend::Wtype => "wtype",
-                        config::TypeBackend::Ydotool => "ydotool",
-                    }
-                ));
-            }
-        }
+    if !uinput::is_available() {
+        missing.push(
+            "/dev/uinput is not accessible. Ensure user is in the 'input' group (or 'uinput' group on some distros)".to_string(),
+        );
     }
 
-    if !config.audio_device.is_empty() && !has_command("pactl") {
+    if !config.audio_device.is_empty() && !util::has_command("pactl") {
         missing.push(
             "pactl (pulseaudio-utils or pipewire-pulse) is required when audio_device is set"
                 .to_string(),
@@ -187,16 +129,12 @@ fn check_runtime_deps(config: &config::Config) -> Result<()> {
 
     if !missing.is_empty() {
         anyhow::bail!(
-            "Missing required tools:\n  - {}\n\nInstall them and try again.",
+            "Missing requirements:\n  - {}\n\nFix and try again.",
             missing.join("\n  - ")
         );
     }
 
     Ok(())
-}
-
-fn has_command(name: &str) -> bool {
-    util::has_command(name)
 }
 
 fn run_check(config: &config::Config) -> Result<()> {
@@ -281,6 +219,8 @@ fn main() -> Result<()> {
     log::info!("Model resolved");
 
     let audio_capture = audio::AudioCapture::new(&loaded.config.audio_device)?;
+    let mut vkbd = uinput::VirtualKeyboard::new()
+        .context("failed to initialize virtual keyboard (/dev/uinput)")?;
 
     let shutdown = Arc::new(AtomicBool::new(false));
     let shutdown_handler = shutdown.clone();
@@ -296,11 +236,10 @@ fn main() -> Result<()> {
     hotkey::spawn_listener(&loaded.config.hotkey, hotkey_tx)?;
     transcriber::spawn_worker(paths, audio_rx, text_tx)?;
 
-    let output_cfg = loaded.config.output.clone();
     std::thread::spawn(move || {
         for text in text_rx {
             log::info!("Transcribed: {text}");
-            if let Err(err) = output::emit_text(&output_cfg, &text) {
+            if let Err(err) = output::emit_text(&text, &mut vkbd) {
                 log::error!("Failed to emit output text: {err}");
             }
         }

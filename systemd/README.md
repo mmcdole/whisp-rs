@@ -28,6 +28,5 @@ systemctl --user daemon-reload
 ## Runtime constraints
 
 - Hotkey capture uses `evdev` (`/dev/input/event*`) and usually requires adding the user to the `input` group.
-- X11 runtime tools: `xclip`, `xdotool`, `xprop`.
-- Wayland runtime tools: `wl-copy`/`wl-paste` and `wtype` or `ydotool`.
+- Text injection uses a native uinput virtual keyboard, so `/dev/uinput` must be writable.
 - Synthetic input on Wayland is compositor-policy dependent; behavior may vary by desktop/compositor.
